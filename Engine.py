@@ -1,4 +1,3 @@
-# @title Default title text
 import pandas as pd
 import json
 
@@ -47,12 +46,17 @@ def remove_outliers(df, column):
 # 2) Main Engine
 # ======================
 
-def analyze_data(file_path):
+def analyze_data(file_path, start_date=None, end_date=None):
     try:
         # ======================
         # Load Data
         # ======================
-        df = pd.read_csv(file_path)
+        # يمكن تغييرها لـ read_excel إذا كان الملف المرفوع بصيغة إكسيل
+        if file_path.endswith('.xlsx'):
+            df = pd.read_excel(file_path)
+        else:
+            df = pd.read_csv(file_path)
+            
         df.columns = df.columns.str.strip().str.lower()
 
         # ======================
@@ -62,8 +66,8 @@ def analyze_data(file_path):
             "price": ["price", "revenue", "amount", "sales"],
             "cost": ["cost", "expense"],
             "profit": ["profit", "gain"],
-            "date": ["date", "order_date","order date"],
-            "product": ["product", "item"],
+            "date": ["date", "order_date"],
+            "product": ["product", "item", "product_name"],
             "region": ["region", "country"]
         }
 
@@ -94,12 +98,25 @@ def analyze_data(file_path):
         df, outliers_removed = remove_outliers(df, price)
 
         # ======================
-        # Prepare Data
+        # Prepare Data & Date Filtering
         # ======================
         df[date] = pd.to_datetime(df[date], errors="coerce")
-        # تعديل 1: استخدام السنة-الشهر لمنع تداخل تواريخ السنوات المختلفة
-        df["month"] = df[date].dt.strftime("%Y-%m")
+        
+        # الفلترة بناءً على التواريخ
+        if start_date:
+            df = df[df[date] >= pd.to_datetime(start_date)]
+        if end_date:
+            df = df[df[date] <= pd.to_datetime(end_date)]
+            
+        # التحقق إذا كان الجدول فارغاً بعد الفلترة
+        if df.empty:
+             return {
+                 "status": "error",
+                 "message": "No data available for the selected date range."
+             }
 
+        # استخدام السنة-الشهر لمنع تداخل تواريخ السنوات المختلفة
+        df["month"] = df[date].dt.strftime("%Y-%m")
         df["revenue"] = df[price]
 
         # ======================
@@ -122,54 +139,32 @@ def analyze_data(file_path):
         profit_margin = (total_profit / total_revenue) * 100 if total_revenue else 0.0
 
         # ======================
-        # Charts (مع تعديل fillna لحماية الـ JSON من الـ NaN)
+        # Charts Data Prep
         # ======================
-        sales_over_time = (
-            df.groupby("month")["revenue"]
-            .sum()
-            .fillna(0)
-            .reset_index()
-            .to_dict(orient="records")
-        )
-
-        profit_over_time = (
-            df.groupby("month")["profit"]
-            .sum()
-            .fillna(0)
-            .reset_index()
-            .to_dict(orient="records")
-        )
+        sales_over_time = df.groupby("month")["revenue"].sum().fillna(0).reset_index().to_dict(orient="records")
+        profit_over_time = df.groupby("month")["profit"].sum().fillna(0).reset_index().to_dict(orient="records")
 
         if product:
-            product_profit = (
-                df.groupby(product)["profit"]
-                .sum()
-                .fillna(0)
-                .reset_index()
-                .sort_values("profit", ascending=False)
-            )
-
-            profit_by_product = product_profit.to_dict(orient="records")
-
-            # Amendment 2: Protection against collapse if the table is complete after cleaning
+            product_profit = df.groupby(product)["profit"].sum().fillna(0).reset_index().sort_values("profit", ascending=False)
+            
+            # توحيد اسم العمود لـ productName ليتوافق مع الـ Front-End
+            product_profit = product_profit.rename(columns={product: "productName"})
+            
             if not product_profit.empty:
-                best_product = str(product_profit.iloc[0][product])
-                worst_product = str(product_profit.iloc[-1][product])
+                best_product = str(product_profit.iloc[0]["productName"])
+                worst_product = str(product_profit.iloc[-1]["productName"])
+                
+                # أفضل 20 وأسوأ 20 منتج
+                top_products = product_profit.head(20).to_dict(orient="records")
+                bottom_products = product_profit.tail(20).to_dict(orient="records")
             else:
-                best_product = None
-                worst_product = None
+                best_product = worst_product = None
+                top_products = bottom_products = []
         else:
-            profit_by_product = []
-            best_product = None
-            worst_product = None
+            best_product = worst_product = None
+            top_products = bottom_products = []
 
-        sales_by_region = (
-            df.groupby(region)["revenue"]
-            .sum()
-            .fillna(0)
-            .reset_index()
-            .to_dict(orient="records")
-        ) if region else []
+        sales_by_region = df.groupby(region)["revenue"].sum().fillna(0).reset_index().to_dict(orient="records") if region else []
 
         # ======================
         # Growth
@@ -221,32 +216,65 @@ def analyze_data(file_path):
         recommendations.append("Focus on high-profit products")
 
         # ======================
-        # Final JSON
+        # Final JSON (The New Structure)
         # ======================
         result = {
             "status": "success",
-            "dashboard": {
-                "cards": [
-                    {"title": "Total Revenue", "value": total_revenue},
-                    {"title": "Total Profit", "value": total_profit},
-                    {"title": "Profit Margin %", "value": round(profit_margin, 2)},
-                    {"title": "Total Orders", "value": total_orders},
-                    {"title": "Best Product", "value": best_product},
-                    {"title": "Worst Product", "value": worst_product}
-                ],
-                "charts": [
-                    {"type": "line", "title": "Sales Over Time", "data": sales_over_time},
-                    {"type": "line", "title": "Profit Over Time", "data": profit_over_time},
-                    {"type": "bar", "title": "Profit by Product", "data": profit_by_product},
-                    {"type": "pie", "title": "Sales by Region", "data": sales_by_region}
-                ]
+            "cards": [
+                {"id": "totalRevenue", "label": "Total Revenue", "value": total_revenue, "format": "currency"},
+                {"id": "totalProfit", "label": "Total Profit", "value": total_profit, "format": "currency"},
+                {"id": "profitMarginPct", "label": "Profit Margin %", "value": round(profit_margin, 2), "format": "percent"},
+                {"id": "totalOrders", "label": "Total Orders", "value": total_orders, "format": "number"},
+                {"id": "bestProduct", "label": "Best Product", "value": best_product, "format": "text"},
+                {"id": "worstProduct", "label": "Worst Product", "value": worst_product, "format": "text"}
+            ],
+            "charts": {
+                "salesOverTime": {
+                    "type": "line",
+                    "title": "Sales Over Time",
+                    "xKey": "month",
+                    "yKey": "revenue",
+                    "yLabel": "Revenue ($)",
+                    "data": sales_over_time
+                },
+                "profitOverTime": {
+                    "type": "line",
+                    "title": "Profit Over Time",
+                    "xKey": "month",
+                    "yKey": "profit",
+                    "yLabel": "Profit ($)",
+                    "data": profit_over_time
+                },
+                "topProductsByProfit": {
+                    "type": "bar",
+                    "title": "Top 20 Products by Profit",
+                    "xKey": "productName",
+                    "yKey": "profit",
+                    "yLabel": "Profit ($)",
+                    "data": top_products
+                },
+                "bottomProductsByProfit": {
+                    "type": "bar",
+                    "title": "Bottom 20 Products by Profit",
+                    "xKey": "productName",
+                    "yKey": "profit",
+                    "yLabel": "Profit ($)",
+                    "data": bottom_products
+                },
+                "salesByRegion": {
+                    "type": "pie",
+                    "title": "Sales by Region",
+                    "nameKey": "region",
+                    "valueKey": "revenue",
+                    "data": sales_by_region
+                }
             },
             "insights": insights,
             "recommendations": recommendations,
-            "data_quality": {
-                "missing_percentage": round(float(missing_percentage), 2),
-                "duplicates_removed": int(duplicates_removed),
-                "outliers_removed": int(outliers_removed)
+            "dataQuality": {
+                "missingPercentage": round(float(missing_percentage), 2),
+                "duplicatesRemoved": int(duplicates_removed),
+                "outliersRemoved": int(outliers_removed)
             }
         }
 
