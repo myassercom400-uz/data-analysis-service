@@ -1,3 +1,4 @@
+# new ENGINE
 import pandas as pd
 import json
 
@@ -8,14 +9,13 @@ import json
 def clean_data(df, price_col, cost_col=None):
     original_rows = len(df)
 
-    # Remove duplicates
+    # إزالة الصفوف المكررة تماماً
     df = df.drop_duplicates()
     duplicates_removed = original_rows - len(df)
 
-    # Handle missing price
+    # تنظيف القيم الفارغة
     df = df[df[price_col].notnull()]
 
-    # Fill missing cost
     if cost_col:
         df[cost_col] = df[cost_col].fillna(df[cost_col].median())
 
@@ -23,24 +23,17 @@ def clean_data(df, price_col, cost_col=None):
 
     return df, duplicates_removed, missing_percentage
 
-
-def remove_outliers(df, column):
+# تم التعديل: نعد القيم الشاذة فقط ولا نحذفها لكي يتطابق الإجمالي مع الإكسيل
+def count_outliers(df, column):
     Q1 = df[column].quantile(0.25)
     Q3 = df[column].quantile(0.75)
-
     IQR = Q3 - Q1
 
     lower = Q1 - 1.5 * IQR
     upper = Q3 + 1.5 * IQR
 
-    before = len(df)
-    df = df[(df[column] >= lower) & (df[column] <= upper)]
-    after = len(df)
-
-    removed = before - after
-
-    return df, removed
-
+    outliers = df[(df[column] < lower) | (df[column] > upper)]
+    return len(outliers)
 
 # ======================
 # 2) Main Engine
@@ -48,10 +41,6 @@ def remove_outliers(df, column):
 
 def analyze_data(file_path, start_date=None, end_date=None):
     try:
-        # ======================
-        # Load Data
-        # ======================
-        # يمكن تغييرها لـ read_excel إذا كان الملف المرفوع بصيغة إكسيل
         if file_path.endswith('.xlsx'):
             df = pd.read_excel(file_path)
         else:
@@ -60,62 +49,63 @@ def analyze_data(file_path, start_date=None, end_date=None):
         df.columns = df.columns.str.strip().str.lower()
 
         # ======================
-        # Column Detection
+        # Smart Column Detection
         # ======================
         aliases = {
-            "price": ["price", "revenue", "amount", "sales"],
-            "cost": ["cost", "expense"],
-            "profit": ["profit", "gain"],
+            "price": ["sales", "revenue", "total", "amount", "price"],
+            "cost": ["cogs", "cost", "expense"],
+            "profit": ["gross income", "net income", "profit", "gain", "income", "margin"],
             "date": ["date", "order_date"],
-            "product": ["product", "item", "product_name"],
-            "region": ["region", "country"]
+            "product": ["product", "item", "product line", "product_name"],
+            "region": ["region", "country", "city", "branch"]
         }
 
-        def detect(possible):
-            for col in df.columns:
-                for name in possible:
+        def detect(possible_aliases, is_money=False):
+            # 1. البحث عن تطابق كامل أولاً (لضمان الدقة)
+            for name in possible_aliases:
+                for col in df.columns:
+                    if name == col:
+                        return col
+            # 2. البحث عن تطابق جزئي
+            for name in possible_aliases:
+                for col in df.columns:
+                    # تجاهل أعمدة النسب المئوية في الحسابات المالية
+                    if is_money and ("percentage" in col or "%" in col or "rate" in col):
+                        continue
                     if name in col:
                         return col
             return None
 
-        price = detect(aliases["price"])
-        cost = detect(aliases["cost"])
-        profit_col = detect(aliases["profit"])
+        # تحديد الأعمدة بذكاء
+        price = detect(aliases["price"], is_money=True)
+        cost = detect(aliases["cost"], is_money=True)
+        profit_col = detect(aliases["profit"], is_money=True)
         date = detect(aliases["date"])
         product = detect(aliases["product"])
         region = detect(aliases["region"])
 
         if not price or not date:
-            return {
-                "status": "error",
-                "message": f"Missing required columns. Found: {df.columns.tolist()}"
-            }
+            return {"status": "error", "message": f"Missing required columns. Found: {df.columns.tolist()}"}
 
         # ======================
         # Cleaning
         # ======================
         df, duplicates_removed, missing_percentage = clean_data(df, price, cost)
-        df, outliers_removed = remove_outliers(df, price)
+        outliers_detected = count_outliers(df, price) # نعدهم فقط
 
         # ======================
         # Prepare Data & Date Filtering
         # ======================
         df[date] = pd.to_datetime(df[date], errors="coerce")
         
-        # الفلترة بناءً على التواريخ
         if start_date:
             df = df[df[date] >= pd.to_datetime(start_date)]
         if end_date:
             df = df[df[date] <= pd.to_datetime(end_date)]
             
-        # التحقق إذا كان الجدول فارغاً بعد الفلترة
         if df.empty:
-             return {
-                 "status": "error",
-                 "message": "No data available for the selected date range."
-             }
+             return {"status": "error", "message": "No data available for the selected date range."}
 
-        # استخدام السنة-الشهر لمنع تداخل تواريخ السنوات المختلفة
         df["month"] = df[date].dt.strftime("%Y-%m")
         df["revenue"] = df[price]
 
@@ -146,17 +136,26 @@ def analyze_data(file_path, start_date=None, end_date=None):
 
         if product:
             product_profit = df.groupby(product)["profit"].sum().fillna(0).reset_index().sort_values("profit", ascending=False)
-            
-            # توحيد اسم العمود لـ productName ليتوافق مع الـ Front-End
             product_profit = product_profit.rename(columns={product: "productName"})
             
             if not product_profit.empty:
                 best_product = str(product_profit.iloc[0]["productName"])
                 worst_product = str(product_profit.iloc[-1]["productName"])
                 
-                # أفضل 20 وأسوأ 20 منتج
-                top_products = product_profit.head(20).to_dict(orient="records")
-                bottom_products = product_profit.tail(20).to_dict(orient="records")
+                num_products = len(product_profit)
+                
+                # حل مشكلة تكرار المنتجات إذا كانت أقل من 20
+                if num_products >= 20:
+                    top_products = product_profit.head(20).to_dict(orient="records")
+                    bottom_products = product_profit.tail(20).to_dict(orient="records")
+                else:
+                    mid = num_products // 2
+                    if mid == 0:
+                        top_products = product_profit.to_dict(orient="records")
+                        bottom_products = []
+                    else:
+                        top_products = product_profit.head(mid).to_dict(orient="records")
+                        bottom_products = product_profit.tail(num_products - mid).to_dict(orient="records")
             else:
                 best_product = worst_product = None
                 top_products = bottom_products = []
@@ -167,56 +166,29 @@ def analyze_data(file_path, start_date=None, end_date=None):
         sales_by_region = df.groupby(region)["revenue"].sum().fillna(0).reset_index().to_dict(orient="records") if region else []
 
         # ======================
-        # Growth
+        # Growth & Insights
         # ======================
         monthly = df.groupby(df[date].dt.to_period("M"))["revenue"].sum()
+        growth = float(monthly.pct_change().iloc[-1] * 100) if len(monthly) > 1 else None
 
-        if len(monthly) > 1:
-            growth = float(monthly.pct_change().iloc[-1] * 100)
-        else:
-            growth = None
-
-        # ======================
-        # Insights
-        # ======================
         insights = []
-
-        if growth is not None:
-            insights.append(f"Revenue changed by {round(growth, 2)}% last month")
-
+        if growth is not None: insights.append(f"Revenue changed by {round(growth, 2)}% last month")
         insights.append(f"Total profit is {round(total_profit, 2)}")
         insights.append(f"Profit margin is {round(profit_margin, 2)}%")
+        if best_product: insights.append(f"{best_product} is the most profitable product")
+        if worst_product: insights.append(f"{worst_product} is the least profitable product")
+        if missing_percentage > 10: insights.append("High missing values detected")
+        if outliers_detected > 0: insights.append(f"{outliers_detected} unusual high sales were detected")
 
-        if best_product:
-            insights.append(f"{best_product} is the most profitable product")
-
-        if worst_product:
-            insights.append(f"{worst_product} is the least profitable product")
-
-        if missing_percentage > 10:
-            insights.append("High missing values detected")
-
-        if outliers_removed > 0:
-            insights.append(f"{outliers_removed} outliers were removed")
-
-        # ======================
-        # Recommendations
-        # ======================
         recommendations = []
-
-        if profit_margin < 20:
-            recommendations.append("Reduce costs to improve profit margin")
-
-        if growth is not None and growth < 0:
-            recommendations.append("Increase marketing campaigns")
-
-        if worst_product:
-            recommendations.append(f"Review {worst_product} performance")
-
+        if profit_margin < 20: recommendations.append("Reduce costs to improve profit margin")
+        if growth is not None and growth < 0: recommendations.append("Increase marketing campaigns")
+        if worst_product: recommendations.append(f"Review {worst_product} performance")
         recommendations.append("Focus on high-profit products")
 
         # ======================
-        # Final JSON (The New Structure)
+# ======================
+        # Final JSON Response
         # ======================
         result = {
             "status": "success",
@@ -274,14 +246,11 @@ def analyze_data(file_path, start_date=None, end_date=None):
             "dataQuality": {
                 "missingPercentage": round(float(missing_percentage), 2),
                 "duplicatesRemoved": int(duplicates_removed),
-                "outliersRemoved": int(outliers_removed)
+                "outliersRemoved": int(outliers_detected)  # المتغير الصح عشان الإيرور بتاع التوتال
             }
         }
 
         return result
 
     except Exception as e:
-        return {
-            "status": "error",
-            "message": str(e)
-        }
+        return {"status": "error", "message": str(e)}
