@@ -3,8 +3,10 @@ import pandas as pd
 
 def generate_recommendations(df):
     try:
+        # 1. تنظيف وتوحيد أسماء الأعمدة لتتوافق مع باقي المحركات
         df.columns = df.columns.str.strip().str.lower()
 
+        # الكشف الذكي عن الأعمدة
         aliases = {
             "price": ["sales", "revenue", "total", "amount", "price"],
             "profit": ["gross income", "net income", "profit", "gain", "income", "margin"],
@@ -32,13 +34,16 @@ def generate_recommendations(df):
 
         recommendations_list = []
 
+        # 2. تحليل أداء المنتجات (تجميع المبيعات والأرباح والكميات)
         agg_dict = {revenue_col: "sum"}
         if profit_col: agg_dict[profit_col] = "sum"
         if qty_col: agg_dict[qty_col] = "sum"
         
         product_perf = df.groupby(product_col).agg(agg_dict).reset_index()
 
+        # 3. ابتكار التوصيات بناءً على المعادلات الإحصائية للمشروع
         
+        # أ) تحديد الحصان الرابح (Top Contributor)
         top_product = product_perf.sort_values(by=revenue_col, ascending=False).iloc[0][product_col]
         recommendations_list.append({
             "type": "strategy",
@@ -46,6 +51,7 @@ def generate_recommendations(df):
             "body": f"المنتج '{top_product}' هو الأعلى تحقيقاً للإيرادات. ننصح بزيادة الحملات الإعلانية له وتأمين مخزونه دايماً."
         })
 
+        # ب) تحديد المنتجات الراكدة أو ضعيفة الأرباح
         if profit_col:
             low_profit_products = product_perf.sort_values(by=profit_col, ascending=True).head(2)
             for _, row in low_profit_products.iterrows():
@@ -62,6 +68,7 @@ def generate_recommendations(df):
                         "body": f"المنتج '{row[product_col]}' أرباحه ضعيفة جداً. جرب تعمل عليه عرض ترويجي (خصم لفترة محدودة) لتسييل البضاعة."
                     })
 
+        # ج) تحليل الكميات لو عمود الكمية موجود (تنبيه إعادة الطلب)
         if qty_col:
             low_qty_products = product_perf.sort_values(by=qty_col, ascending=True).head(2)
             for _, row in low_qty_products.iterrows():
