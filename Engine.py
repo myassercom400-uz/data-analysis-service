@@ -133,18 +133,40 @@ def analyze_data(file_path, start_date=None, end_date=None):
         growth = float(monthly.pct_change().iloc[-1] * 100) if len(monthly) > 1 else 0.0
 
         # ======================
-        # Category Analysis (Percentage Based)
+        # ======================
+        # Category Analysis (Percentage Based & 100% Fixed)
         # ======================
         total_p_sum = total_profit if total_profit else 1.0
         cat_analysis = {}
-        # تحليل أعلى 5 منتجات كفئات أساسية
-        for item in top_products[:5]:
-            pct = (item['profit'] / total_p_sum * 100)
-            cat_analysis[item['productName']] = {
-                "contribution": f"{round(pct, 2)}%",
-                "status": "Market Leader" if pct > 20 else "Stable Growth",
-                "action": "Inventory Priority" if pct > 20 else "Market Expansion"
-            }
+        
+        if product and not product_profit.empty:
+            top_5_df = product_profit.head(5)
+            accumulated_pct = 0.0
+            
+            for _, row in top_5_df.iterrows():
+                p_name = str(row["productName"])
+                p_profit = float(row["profit"])
+                
+                # حساب النسبة وتقريبها لرقمين عشريين
+                pct = round((p_profit / total_p_sum) * 100, 2)
+                accumulated_pct += pct
+                
+                cat_analysis[p_name] = {
+                    "contribution": f"{pct}%",
+                    "status": "Market Leader" if pct > 20 else "Stable Growth",
+                    "action": "Inventory Priority" if pct > 20 else "Market Expansion"
+                }
+                
+            # إضافة قسم "Others" لتقفيل النسبة لـ 100% بالضبط لو في منتجات تانية
+            if len(product_profit) > 5:
+                rem_pct = round(100.0 - accumulated_pct, 2)
+                # نتأكد إن النسبة المتبقية أكبر من الصفر
+                if rem_pct > 0:
+                    cat_analysis["Others"] = {
+                        "contribution": f"{rem_pct}%",
+                        "status": "Diversified",
+                        "action": "Monitor Portfolio"
+                    }
 
         # Recommendations Logic
         recommendations = []
