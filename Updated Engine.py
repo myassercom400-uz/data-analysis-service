@@ -67,9 +67,22 @@ def analyze_data(file_path, start_date=None, end_date=None):
         region = detect(aliases["region"])
         qty_col = detect(aliases["quantity"])
 
-        if not price or not date:
-            return {"status": "error", "message": f"Missing required columns. Found: {df.columns.tolist()}"}
-
+        # ======================
+        # Validation & Missing Columns Logic
+        # ======================
+        missing_required = []
+        
+        if not price:
+            missing_required.append("Price/Revenue")
+        if not date:
+            missing_required.append("Date")
+        # Return the missing 
+        if missing_required:
+            missing_str = " and ".join(missing_required)
+            return {
+                "status": "error", 
+                "message": f"Cannot analyze the file. Missing required columns: {missing_str}."
+            }
         df, duplicates_removed, missing_percentage = clean_data(df, price, cost)
         outliers_detected = count_outliers(df, price)
 
