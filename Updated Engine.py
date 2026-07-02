@@ -30,11 +30,21 @@ def count_outliers(df, column):
 # ======================
 def analyze_data(file_path, start_date=None, end_date=None):
     try:
+       # File Reading with Fallback Mechanism for Encodings
         if file_path.endswith('.xlsx'):
             df = pd.read_excel(file_path)
         else:
-            df = pd.read_csv(file_path)
-            
+            try:
+                # Default global encoding
+                df = pd.read_csv(file_path, encoding='utf-8')
+            except UnicodeDecodeError:
+                try:
+                    # Fallback for Windows Excel files (Arabic locale)
+                    df = pd.read_csv(file_path, encoding='cp1256')
+                except UnicodeDecodeError:
+                    # Broad fallback for older formats
+                    df = pd.read_csv(file_path, encoding='latin1')
+                   
         df.columns = df.columns.str.strip().str.lower()
 
         aliases = {
